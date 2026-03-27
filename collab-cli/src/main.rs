@@ -10,11 +10,11 @@ use client::CollabClient;
 #[command(name = "collab")]
 #[command(about = "Collaboration tool for Claude Code instances", long_about = None)]
 struct Cli {
-    /// Server URL (default: http://localhost:8000)
+    /// Server URL (default: http://localhost:8000, or $COLLAB_SERVER)
     #[arg(short, long, default_value = "http://localhost:8000")]
     server: String,
 
-    /// Instance identifier for this Claude Code worker
+    /// Instance identifier (or $COLLAB_INSTANCE)
     #[arg(short, long)]
     instance: Option<String>,
 
@@ -62,7 +62,18 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+    
+    // Read from env vars if not provided via CLI
+    if cli.server == "http://localhost:8000" {
+        if let Ok(server) = std::env::var("COLLAB_SERVER") {
+            cli.server = server;
+        }
+    }
+    
+    if cli.instance.is_none() {
+        cli.instance = std::env::var("COLLAB_INSTANCE").ok();
+    }
     
     // Roster command doesn't need instance ID
     if matches!(cli.command, Commands::Roster) {

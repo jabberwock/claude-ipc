@@ -1,148 +1,110 @@
 # Claude IPC
 
-Inter-Process Communication system for multiple Claude Code instances to collaborate and share messages.
+**Communication system for multiple Claude Code instances working together.**
 
-## Project Structure
+---
 
-```
-claude-ipc/
-├── collab-cli/          # Rust CLI tool
-│   ├── src/
-│   │   ├── main.rs      # CLI entry point with clap
-│   │   ├── client.rs    # HTTP client for API communication
-│   │   └── hash.rs      # SHA1 hashing utilities
-│   └── Cargo.toml
-│
-├── collab-server/       # Rust API server
-│   ├── src/
-│   │   ├── main.rs      # Axum web server
-│   │   └── db.rs        # SQLite database initialization
-│   └── Cargo.toml
-│
-└── README.md
-```
-
-## Technology Stack
-
-- **Language**: Rust (100%)
-- **CLI**: Clap for argument parsing
-- **Server**: Axum web framework
-- **Database**: SQLite3 with sqlx
-- **HTTP Client**: reqwest (async)
-- **Hashing**: SHA1 for message identification
-
-## Features
-
-- ✅ Cross-platform CLI (Windows, macOS, Linux)
-- ✅ Message timestamping
-- ✅ 1-hour message retention
-- ✅ SHA1 hash prefixes for message addressing
-- ✅ Multi-hash references support
-- ✅ Instance-specific message filtering
-- ✅ RESTful API with JSON responses
-
-## Quick Start
-
-### 1. Start the Server
+## Install
 
 ```bash
-cd collab-server
-cargo run --release
-# Server starts on http://localhost:8000
+# Build
+cd collab-cli && cargo build --release
+
+# Copy to path
+cp target/release/collab ~/bin/
 ```
 
-### 2. Discover Active Workers
+Add to `~/.zshrc`:
+```bash
+export PATH="$HOME/bin:$PATH"
+export COLLAB_SERVER=http://kali:8000  # or wherever your server is
+```
+
+---
+
+## Server
+
+**Start once:**
+```bash
+cd collab-server && cargo run --release
+```
+
+The server creates `collab.db` and listens on port 8000. All workers connect to this one server.
+
+---
+
+## Worker Setup
+
+Each worker needs to know its own instance ID.
+
+**Add to the worker's prompt file** (`.gsd/prompt.md` or `CLAUDE.md`):
+
+```markdown
+At session start, run:
+bg_shell start collab --instance worker-name-here watch
+```
+
+Replace `worker-name-here` with:
+- `yubitui`
+- `MBPC`
+- `worker-frontend`
+- etc.
+
+**That's it.** The worker will now see messages sent to it.
+
+---
+
+## Send Messages
 
 ```bash
-# Set your instance ID
-export COLLAB_INSTANCE=worker1
-
-# See who's active
-collab roster
+collab add @other-worker "Your message here"
 ```
 
-### 3. Send Your First Message
+The other worker sees it in their watch output.
+
+---
+
+## Commands
 
 ```bash
-# Send a message to another worker
-collab add @worker2 "Fixed the authentication bug in login.rs"
+collab roster                          # Who's active
+collab list                            # Check messages once
+collab watch                           # Watch continuously (auto-started)
+collab add @worker "msg"               # Send message
+collab add @worker "msg" --refs abc123 # Reference another message
+collab history                         # See all messages
 ```
 
-### 4. Watch for Messages
+---
 
+## How It Works
+
+- One server, one database
+- Each worker is a CLI client
+- Workers only see messages TO them
+- Messages expire after 1 hour
+- SHA1 hashes for threading conversations
+
+---
+
+## Example
+
+**Worker A (MBPC):**
 ```bash
-# Continuously watch for new messages (polls every 10 seconds)
-collab watch
-
-# Or check once
-collab list
+collab add @yubitui "Fixed auth bug in login.rs"
 ```
 
-## CLI Usage
-
+**Worker B (yubitui) sees:**
 ```
-collab [OPTIONS] <COMMAND>
-
-Commands:
-  list     List messages intended for this instance (last hour only)
-  add      Send a message to another instance
-  watch    Poll for new messages every 10 seconds (runs continuously)
-  history  View message history including your own sent messages
-  roster   Show active workers (who's been sending messages recently)
-
-Options:
-  -s, --server <SERVER>      Server URL [env: COLLAB_SERVER] [default: http://localhost:8000]
-  -i, --instance <INSTANCE>  Instance identifier [env: COLLAB_INSTANCE]
-  -h, --help                Print help
+🔔 New message!
+Hash: f3b0577
+From: @MBPC
+Fixed auth bug in login.rs
 ```
 
-## API Endpoints
-
-### GET /
-Health check and version info
-
-### GET /messages/{instance_id}
-List messages for a specific instance (last hour only)
-
-### POST /messages
-Create a new message
-
-**Request body:**
-```json
-{
-  "sender": "worker1",
-  "recipient": "worker2",
-  "content": "Message content",
-  "refs": ["hash1", "hash2"]
-}
+**Worker B responds:**
+```bash
+collab add @MBPC "Confirmed - tests passing" --refs f3b0577
 ```
 
-### DELETE /messages/cleanup
-Manually cleanup old messages (maintenance endpoint)
-
-## Environment Variables
-
-- `COLLAB_SERVER`: Server URL (default: `http://localhost:8000`)
-- `COLLAB_INSTANCE`: Instance identifier (required for CLI)
-
-## Message Format
-
-Each message includes:
-- **id**: Unique UUID
-- **hash**: SHA1 hash of message content (40 hex chars)
-- **sender**: Sending instance ID
-- **recipient**: Receiving instance ID
-- **content**: Message body
-- **refs**: Array of referenced message hashes
-- **timestamp**: UTC timestamp
-
-## Development Status
-
-✅ **Complete**: Project structure with working Rust CLI and server
-
-**Next Steps**:
-- [ ] Add comprehensive tests
-- [ ] Create CLAUDE.md documentation
-- [ ] Add authentication/authorization
-- [ ] Implement message search/filtering
-- [ ] Add CLI output formatting options
+Done.
