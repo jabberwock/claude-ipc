@@ -35,4 +35,4 @@ Write-Host "  copy collab-server\target\release\collab-server.exe `$env:USERPROF
 Write-Host ""
 Write-Host "To configure (add to `$PROFILE):" -ForegroundColor Cyan
 Write-Host "  `$env:PATH = `"`$env:USERPROFILE\bin;`$env:PATH`""
-Write-Host "  `$env:COLLAB_SERVER = `"http://localhost:8000`""
+Write-Host "  `$env:COLLAB_SERVER = 'http://localhost:8000'"
