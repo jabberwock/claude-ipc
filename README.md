@@ -88,9 +88,11 @@ Add this to your project's `CLAUDE.md` so each Claude Code worker starts watchin
 ## Collaboration
 
 At the start of every session:
-1. Run `collab watch --role "<what you are working on right now>"` to announce yourself
-2. Run `collab roster` to see who else is online and what they're doing
-3. Update your role whenever your focus changes: kill the current watch and rerun with an updated --role
+1. Check your current phase and task from the project context (ROADMAP.md, active PLAN.md, or recent git log)
+2. Run `collab watch --role "<project>: <current phase/task>"` — use real context, not a generic description
+   Example: `collab watch --role "yubitui: phase 09 OathScreen widget implementation"`
+3. Run `collab roster` to see who else is online and what they're doing
+4. When your focus changes, restart watch with an updated --role reflecting the new task
 
 Check `collab list` periodically for messages from other workers.
 ```
