@@ -141,14 +141,22 @@ Add this to your project's `CLAUDE.md` so each Claude Code worker starts watchin
 
 At the start of every session:
 1. Check your current phase and task from the project context (ROADMAP.md, active PLAN.md, or recent git log)
-2. Run `collab watch --role "<project>: <current phase/task>"` — use real context, not a generic description
+2. Run `collab list` and READ the output before doing anything else — treat pending messages as blocking
+3. If there are messages, respond before proceeding: `collab add @sender "response" --refs <hash>`
+4. Run `collab watch --role "<project>: <your current task>"` with real context, not a leftover or generic description
    Example: `collab watch --role "yubitui: phase 09 OathScreen widget implementation"`
-3. Run `collab roster` to see who else is online and what they're doing
-4. When your focus changes, restart watch with an updated --role reflecting the new task
-5. Before starting any new task, run `collab list` to check for pending messages
-6. If there are messages, respond before proceeding: `collab add @sender "response" --refs <hash>`
-7. If you make a change that affects shared interfaces, APIs, or files another worker depends on,
-   notify them immediately: `collab add @other-worker "changed X in file Y — you may need to update Z"`
+5. Run `collab roster` to see who else is online and what they're working on
+
+When your focus changes, restart watch with an updated --role.
+
+When to message other workers (keep it signal, not noise):
+- A public API changed: trait signature, method rename, new required field
+  Example: `collab add @yubitui "renamed Widget::render to Widget::draw in widget/mod.rs — update any impl blocks"`
+- A new widget or utility they might want to use
+- Something that was working changed behavior
+
+Do NOT message for: general progress updates, phase completions, or anything they don't need to act on.
+Never message yourself.
 ```
 
 Each worker's `~/.collab.toml` should already have their `instance` name and `recipients` configured — Claude Code will pick that up automatically.
