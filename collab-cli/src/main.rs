@@ -71,7 +71,21 @@ enum Commands {
         /// Only show messages received since the last time you ran `list`
         #[arg(short, long)]
         unread: bool,
+
+        /// Only show messages from a specific sender (e.g., @kali)
+        #[arg(short, long, value_name = "@INSTANCE")]
+        from: Option<String>,
     },
+
+    /// Show a single message by hash prefix
+    Show {
+        /// Hash prefix of the message to display (at least 4 chars)
+        #[arg(value_name = "HASH")]
+        hash: String,
+    },
+
+    /// Show unread messages and roster in one command (recommended cold-start)
+    Status,
 
     /// Send a message to another instance
     Add {
@@ -167,8 +181,14 @@ async fn main() -> Result<()> {
     let client = CollabClient::new(&server, &instance_id, token.as_deref());
 
     match cli.command {
-        Commands::List { unread } => {
-            client.list_messages(unread).await?;
+        Commands::List { unread, from } => {
+            client.list_messages(unread, from.as_deref()).await?;
+        }
+        Commands::Show { hash } => {
+            client.show_message(&hash).await?;
+        }
+        Commands::Status => {
+            client.show_status().await?;
         }
         Commands::Add { recipient, message, refs } => {
             let recipient = recipient.trim_start_matches('@');

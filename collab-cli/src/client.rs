@@ -11,6 +11,8 @@ use std::path::PathBuf;
 struct ReadState {
     /// instance_id → timestamp of the newest message seen in the last `list` run
     last_read: HashMap<String, DateTime<Utc>>,
+    /// instance_id → last role set via `collab watch --role`
+    roles: HashMap<String, String>,
 }
 
 fn state_path() -> Option<PathBuf> {
@@ -96,7 +98,7 @@ impl CollabClient {
         Ok(())
     }
 
-    pub async fn list_messages(&self, unread_only: bool) -> Result<()> {
+    pub async fn list_messages(&self, unread_only: bool, from_filter: Option<&str>) -> Result<()> {
         let url = format!("{}/messages/{}", self.base_url, self.instance_id);
 
         let response = self.auth(self.client.get(&url)).send().await?;
@@ -116,7 +118,14 @@ impl CollabClient {
             }
         }
 
-        // Update last_read to the newest message timestamp seen
+        if let Some(sender) = from_filter {
+            let sender = sender.trim_start_matches('@');
+            messages.retain(|m| m.sender == sender);
+        }
+
+        // Update last_read based on all messages (before --from filter narrows the set)
+        // We already have all_messages before the from_filter retain, but we applied retain in-place.
+        // Use the filtered set for unread tracking — seeing messages from @kali marks them read too.
         if let Some(newest) = messages.iter().map(|m| m.timestamp).max() {
             let current = last_read.unwrap_or(DateTime::<Utc>::MIN_UTC);
             if newest > current {
@@ -149,6 +158,125 @@ impl CollabClient {
             println!("\n{}\n", msg.content);
         }
         println!("─────────────────────────────────────");
+
+        Ok(())
+    }
+
+    pub async fn show_message(&self, hash_prefix: &str) -> Result<()> {
+        let url = format!("{}/history/{}", self.base_url, self.instance_id);
+        let response = self.auth(self.client.get(&url)).send().await?;
+        if !response.status().is_success() {
+            anyhow::bail!("Failed to fetch history: {}", response.status());
+        }
+        let messages: Vec<Message> = response.json().await?;
+        let prefix = hash_prefix.trim_start_matches('@').to_lowercase();
+        let matches: Vec<&Message> = messages.iter()
+            .filter(|m| m.hash.starts_with(&prefix))
+            .collect();
+        match matches.len() {
+            0 => anyhow::bail!("No message found with hash starting '{}'", prefix),
+            n if n > 1 => anyhow::bail!("Ambiguous: {} messages match '{}', use more characters", n, prefix),
+            _ => {
+                let msg = matches[0];
+                let direction = if msg.sender == self.instance_id {
+                    format!("you → @{}", msg.recipient)
+                } else {
+                    format!("@{} → you", msg.sender)
+                };
+                println!("─────────────────────────────────────");
+                println!("Hash: {}", &msg.hash[..7]);
+                println!("From: @{}  To: @{}", msg.sender, msg.recipient);
+                println!("Dir:  {}", direction);
+                println!("Time: {}", msg.timestamp.format("%Y-%m-%d %H:%M:%S UTC"));
+                if !msg.refs.is_empty() {
+                    let short_refs: Vec<String> = msg.refs.iter()
+                        .map(|r| r.chars().take(7).collect())
+                        .collect();
+                    println!("Refs: {}", short_refs.join(", "));
+                }
+                println!("\n{}", msg.content);
+                println!("─────────────────────────────────────");
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn show_status(&self) -> Result<()> {
+        let (roster_r, messages_r) = tokio::join!(
+            self.fetch_roster_pub(),
+            async {
+                let url = format!("{}/messages/{}", self.base_url, self.instance_id);
+                let resp = self.auth(self.client.get(&url)).send().await?;
+                resp.json::<Vec<Message>>().await.map_err(anyhow::Error::from)
+            }
+        );
+
+        // Roster
+        match roster_r {
+            Ok(workers) => {
+                if workers.is_empty() {
+                    println!("No active workers.\n");
+                } else {
+                    println!("Active workers:\n");
+                    for worker in &workers {
+                        let you = if worker.instance_id == self.instance_id { " ◀ you" } else { "" };
+                        print!("  @{}{}", worker.instance_id, you);
+                        if !worker.role.is_empty() {
+                            print!("  —  {}", worker.role);
+                        }
+                        println!();
+                        println!("    Last seen: {}", worker.last_seen.format("%H:%M:%S UTC"));
+                        println!();
+                    }
+                }
+            }
+            Err(e) => eprintln!("Warning: could not fetch roster: {}", e),
+        }
+
+        // Unread messages
+        let mut state = load_read_state();
+        let last_read = state.last_read.get(&self.instance_id).copied();
+
+        match messages_r {
+            Ok(mut messages) => {
+                if let Some(since) = last_read {
+                    messages.retain(|m| m.timestamp > since);
+                }
+                // Update read state
+                let url = format!("{}/messages/{}", self.base_url, self.instance_id);
+                if let Ok(resp) = self.auth(self.client.get(&url)).send().await {
+                    if let Ok(all_msgs) = resp.json::<Vec<Message>>().await {
+                        if let Some(newest) = all_msgs.iter().map(|m| m.timestamp).max() {
+                            let current = last_read.unwrap_or(DateTime::<Utc>::MIN_UTC);
+                            if newest > current {
+                                state.last_read.insert(self.instance_id.clone(), newest);
+                                save_read_state(&state);
+                            }
+                        }
+                    }
+                }
+                if messages.is_empty() {
+                    println!("No unread messages.");
+                } else {
+                    println!("Unread messages for @{}:\n", self.instance_id);
+                    for msg in &messages {
+                        println!("─────────────────────────────────────");
+                        println!("Hash: {}", &msg.hash[..7]);
+                        println!("From: @{}", msg.sender);
+                        println!("Time: {}", msg.timestamp.format("%Y-%m-%d %H:%M:%S UTC"));
+                        if !msg.refs.is_empty() {
+                            let short_refs: Vec<String> = msg.refs.iter()
+                                .map(|r| r.chars().take(7).collect())
+                                .collect();
+                            println!("Refs: {}", short_refs.join(", "));
+                        }
+                        println!("\n{}\n", msg.content);
+                    }
+                    println!("─────────────────────────────────────");
+                }
+            }
+            Err(e) => eprintln!("Warning: could not fetch messages: {}", e),
+        }
 
         Ok(())
     }
@@ -208,7 +336,16 @@ impl CollabClient {
         // Track which recipients have been seen at least once
         let mut seen_recipients: HashSet<String> = HashSet::new();
 
-        let role_str = role.as_deref();
+        // Persist role across context resets: use provided role, fall back to saved role
+        let mut state = load_read_state();
+        let effective_role = role.clone().or_else(|| {
+            state.roles.get(&self.instance_id).cloned()
+        });
+        if let Some(ref r) = role {
+            state.roles.insert(self.instance_id.clone(), r.clone());
+            save_read_state(&state);
+        }
+        let role_str = effective_role.as_deref();
 
         println!("Watching for messages to @{} (polling every {}s)", self.instance_id, interval_secs);
         if !recipients.is_empty() {

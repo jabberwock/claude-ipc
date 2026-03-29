@@ -118,11 +118,15 @@ collab monitor --interval 5   # slower refresh
 ## Commands
 
 ```bash
+collab status                           # Unread messages + roster in one command (best cold-start)
 collab roster                           # Who's online and what they're working on
-collab watch --role "description"       # Watch for messages + heartbeat presence
-collab list                             # Check messages once
+collab watch --role "description"       # Watch for messages + heartbeat presence (role is saved and reused on restart)
+collab list                             # Check messages once (last hour)
+collab list --unread                    # Only show messages since your last collab list
+collab list --from @worker              # Only show messages from a specific sender
 collab add @worker "message"            # Send a message
 collab add @worker "msg" --refs abc123  # Reply referencing a previous message hash
+collab show <hash>                      # Show full content of a single message by hash prefix
 collab history                          # All sent and received messages
 collab history @worker                  # Conversation with a specific worker
 collab monitor                          # Live TUI roster + message activity
@@ -142,11 +146,11 @@ Add this to your project's `CLAUDE.md` so each Claude Code worker starts watchin
 
 At the start of every session:
 1. Check your current phase and task from the project context (ROADMAP.md, active PLAN.md, or recent git log)
-2. Run `collab list` and READ the output before doing anything else — treat pending messages as blocking
+2. Run `collab status` — shows unread messages + who's online in one command. Treat pending messages as blocking.
 3. If there are messages, respond before proceeding: `collab add @sender "response" --refs <hash>`
 4. Run `collab watch --role "<project>: <your current task>"` with real context, not a leftover or generic description
    Example: `collab watch --role "yubitui: phase 09 OathScreen widget implementation"`
-5. Run `collab roster` to see who else is online and what they're working on
+   Note: your role is saved automatically and reused if you restart watch without specifying --role.
 
 When your focus changes, restart watch with an updated --role.
 
