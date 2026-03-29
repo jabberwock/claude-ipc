@@ -67,15 +67,30 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// List messages intended for this instance (last hour only)
+    /// List messages intended for this instance (unread by default)
     List {
-        /// Only show messages received since the last time you ran `list`
+        /// Show all messages from the last hour, not just unread
         #[arg(short, long)]
-        unread: bool,
+        all: bool,
 
         /// Only show messages from a specific sender (e.g., @kali)
         #[arg(short, long, value_name = "@INSTANCE")]
         from: Option<String>,
+
+        /// Only show messages after the message with this hash prefix
+        #[arg(long, value_name = "HASH")]
+        since: Option<String>,
+    },
+
+    /// Reply to the most recent message from a sender (auto-fills --refs)
+    Reply {
+        /// Sender to reply to (e.g., @kali)
+        #[arg(value_name = "@INSTANCE")]
+        sender: String,
+
+        /// Message content
+        #[arg(value_name = "MESSAGE")]
+        message: String,
     },
 
     /// Show a single message by hash prefix
@@ -183,8 +198,11 @@ async fn main() -> Result<()> {
     let client = CollabClient::new(&server, &instance_id, token.as_deref());
 
     match cli.command {
-        Commands::List { unread, from } => {
-            client.list_messages(unread, from.as_deref()).await?;
+        Commands::List { all, from, since } => {
+            client.list_messages(!all, from.as_deref(), since.as_deref()).await?;
+        }
+        Commands::Reply { sender, message } => {
+            client.reply_to_latest(&sender, &message).await?;
         }
         Commands::Show { hash } => {
             client.show_message(&hash).await?;

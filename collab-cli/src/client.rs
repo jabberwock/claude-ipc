@@ -13,6 +13,9 @@ struct ReadState {
     last_read: HashMap<String, DateTime<Utc>>,
     /// instance_id → last role set via `collab watch --role`
     roles: HashMap<String, String>,
+    /// set of message hashes we have replied to (via `reply` or `add --refs`)
+    #[serde(default)]
+    replied: HashSet<String>,
 }
 
 fn state_path() -> Option<PathBuf> {
@@ -98,7 +101,7 @@ impl CollabClient {
         Ok(())
     }
 
-    pub async fn list_messages(&self, unread_only: bool, from_filter: Option<&str>) -> Result<()> {
+    pub async fn list_messages(&self, unread_only: bool, from_filter: Option<&str>, since_hash: Option<&str>) -> Result<()> {
         let url = format!("{}/messages/{}", self.base_url, self.instance_id);
 
         let response = self.auth(self.client.get(&url)).send().await?;
@@ -112,7 +115,22 @@ impl CollabClient {
         let mut state = load_read_state();
         let last_read = state.last_read.get(&self.instance_id).copied();
 
-        if unread_only {
+        // --since <hash>: show messages after the message with this hash prefix
+        if let Some(prefix) = since_hash {
+            let prefix = prefix.trim_start_matches('@').to_lowercase();
+            // Find the timestamp of the referenced message (search history for it)
+            let history_url = format!("{}/history/{}", self.base_url, self.instance_id);
+            if let Ok(resp) = self.auth(self.client.get(&history_url)).send().await {
+                if let Ok(history) = resp.json::<Vec<Message>>().await {
+                    if let Some(anchor) = history.iter().find(|m| m.hash.starts_with(&prefix)) {
+                        let anchor_ts = anchor.timestamp;
+                        messages.retain(|m| m.timestamp > anchor_ts);
+                    } else {
+                        anyhow::bail!("No message found with hash starting '{}'", prefix);
+                    }
+                }
+            }
+        } else if unread_only {
             if let Some(since) = last_read {
                 messages.retain(|m| m.timestamp > since);
             }
@@ -145,8 +163,13 @@ impl CollabClient {
 
         println!("Messages for @{}:\n", self.instance_id);
         for msg in &messages {
+            let replied = state.replied.contains(&msg.hash);
             println!("─────────────────────────────────────");
-            println!("Hash: {}", &msg.hash[..7]);
+            if replied {
+                println!("Hash: {} [replied]", &msg.hash[..7]);
+            } else {
+                println!("Hash: {}", &msg.hash[..7]);
+            }
             println!("From: @{}", msg.sender);
             println!("Time: {}", msg.timestamp.format("%Y-%m-%d %H:%M:%S UTC"));
             if !msg.refs.is_empty() {
@@ -160,6 +183,26 @@ impl CollabClient {
         println!("─────────────────────────────────────");
 
         Ok(())
+    }
+
+    pub async fn reply_to_latest(&self, sender: &str, content: &str) -> Result<()> {
+        let sender = sender.trim_start_matches('@');
+        let url = format!("{}/history/{}", self.base_url, self.instance_id);
+        let response = self.auth(self.client.get(&url)).send().await?;
+        if !response.status().is_success() {
+            anyhow::bail!("Failed to fetch history: {}", response.status());
+        }
+        let messages: Vec<Message> = response.json().await?;
+        let latest = messages.iter()
+            .filter(|m| m.sender == sender)
+            .max_by_key(|m| m.timestamp);
+        match latest {
+            None => anyhow::bail!("No messages found from @{}", sender),
+            Some(msg) => {
+                println!("Replying to {} [{}] from @{}", msg.timestamp.format("%H:%M:%S UTC"), &msg.hash[..7], sender);
+                self.add_message(sender, content, Some(vec![msg.hash.clone()])).await
+            }
+        }
     }
 
     pub async fn show_message(&self, hash_prefix: &str) -> Result<()> {
@@ -295,11 +338,12 @@ impl CollabClient {
             refs: Vec<String>,
         }
 
+        let ref_hashes = refs.unwrap_or_default();
         let payload = CreateMessage {
             sender: self.instance_id.clone(),
             recipient: recipient.to_string(),
             content: content.to_string(),
-            refs: refs.unwrap_or_default(),
+            refs: ref_hashes.clone(),
         };
 
         let url = format!("{}/messages", self.base_url);
@@ -314,6 +358,15 @@ impl CollabClient {
         }
 
         let msg: Message = response.json().await?;
+
+        // Mark any referenced messages as replied
+        if !ref_hashes.is_empty() {
+            let mut state = load_read_state();
+            for h in &ref_hashes {
+                state.replied.insert(h.clone());
+            }
+            save_read_state(&state);
+        }
 
         println!("✓ Message sent to @{}", recipient);
         println!("  Hash: {}", &msg.hash[..7]);
