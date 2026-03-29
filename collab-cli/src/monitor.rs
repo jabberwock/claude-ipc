@@ -9,7 +9,7 @@ use std::cell::{Cell, RefCell};
 use std::time::{Duration, Instant};
 use textual_rs::{
     event::keybinding::KeyBinding,
-    hyperlink::render_hyperlink,
+
     widget::{context::AppContext, EventPropagation, WidgetId},
     App, ModalScreen, Widget, WorkerResult,
 };
@@ -1386,15 +1386,35 @@ fn put(buf: &mut Buffer, x: u16, y: u16, s: &str, max_w: usize, style: Style) {
 }
 
 /// Render a hash as an OSC 8 hyperlink if COLLAB_REPO is set, otherwise plain text.
+/// Directly patches ratatui buffer cells with OSC 8 escape sequences.
 /// Returns the number of terminal columns consumed.
 fn render_hash_link(buf: &mut Buffer, x: u16, y: u16, hash: &str, style: Style) -> u16 {
+    let width = hash.chars().count() as u16;
+    buf.set_string(x, y, hash, style);
     if let Ok(repo) = std::env::var("COLLAB_REPO") {
         let url = format!("{}/commit/{}", repo.trim_end_matches('/'), hash);
-        render_hyperlink(buf, x, y, &url, hash, style)
-    } else {
-        buf.set_string(x, y, hash, style);
-        hash.chars().count() as u16
+        let open = format!("\x1b]8;;{}\x1b\\", url);
+        let close = "\x1b]8;;\x1b\\".to_string();
+        // Patch first cell: prepend OSC 8 open sequence before the visible char
+        if width > 0 {
+            if let Some(cell) = buf.cell_mut((x, y)) {
+                let sym = cell.symbol().to_string();
+                cell.set_symbol(&format!("{}{}", open, sym));
+            }
+        }
+        // Patch last cell: append OSC 8 close sequence after the visible char
+        let last_x = x + width.saturating_sub(1);
+        if width == 1 {
+            if let Some(cell) = buf.cell_mut((x, y)) {
+                let sym = cell.symbol().to_string();
+                cell.set_symbol(&format!("{}{}", sym, close));
+            }
+        } else if let Some(cell) = buf.cell_mut((last_x, y)) {
+            let sym = cell.symbol().to_string();
+            cell.set_symbol(&format!("{}{}", sym, close));
+        }
     }
+    width
 }
 
 /// Draw a rounded box border.
@@ -1473,3 +1493,56 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
     }
     lines
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use ratatui::style::Style;
+
+    #[test]
+    fn render_hash_link_emits_osc8_when_repo_set() {
+        std::env::set_var("COLLAB_REPO", "https://github.com/test/repo");
+        let area = Rect::new(0, 0, 50, 1);
+        let mut buf = Buffer::empty(area);
+        let hash = "abc1234def5678901234567890123456abcd1234";
+        render_hash_link(&mut buf, 0, 0, hash, Style::default());
+
+        let first = buf.cell((0, 0)).unwrap().symbol().to_string();
+        let last = buf.cell((hash.len() as u16 - 1, 0)).unwrap().symbol().to_string();
+
+        assert!(first.contains("\x1b]8;;"), "first cell missing OSC 8 open: {:?}", first);
+        assert!(first.contains("https://github.com/test/repo/commit/"), "first cell missing URL: {:?}", first);
+        assert!(last.contains("\x1b]8;;\x1b\\"), "last cell missing OSC 8 close: {:?}", last);
+        std::env::remove_var("COLLAB_REPO");
+    }
+
+    #[test]
+    fn render_hash_link_plain_when_no_repo() {
+        std::env::remove_var("COLLAB_REPO");
+        let area = Rect::new(0, 0, 20, 1);
+        let mut buf = Buffer::empty(area);
+        render_hash_link(&mut buf, 0, 0, "abc1234", Style::default());
+        let first = buf.cell((0, 0)).unwrap().symbol().to_string();
+        assert_eq!(first, "a");
+    }
+}
+
+    #[test]
+    fn debug_cell_mut() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+        let area = Rect::new(0, 0, 10, 1);
+        let mut buf = Buffer::empty(area);
+        buf.set_string(0, 0, "hello", ratatui::style::Style::default());
+        println!("area: {:?}", buf.area);
+        println!("cell(0,0): {:?}", buf.cell((0u16, 0u16)).map(|c| c.symbol().to_string()));
+        if let Some(cell) = buf.cell_mut((0u16, 0u16)) {
+            cell.set_symbol("X");
+            println!("patched to X");
+        } else {
+            println!("cell_mut returned None!");
+        }
+        println!("after: {:?}", buf.cell((0u16, 0u16)).map(|c| c.symbol().to_string()));
+    }
