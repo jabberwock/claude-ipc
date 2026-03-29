@@ -10,6 +10,7 @@ name = "collab"
 path = "src/main.rs"
 
 [features]
+default = ["monitor"]
 monitor = ["ratatui", "crossterm", "textual-rs"]
 
 [dependencies]
