@@ -179,6 +179,9 @@ impl CollabClient {
 
         let mut messages: Vec<Message> = response.json().await?;
 
+        // Filter out control signals — they're internal plumbing, not human messages.
+        messages.retain(|m| m.content.trim() != STOP_WATCH_SIGNAL);
+
         let mut state = load_read_state();
         let last_read = state.last_read.get(&self.instance_id).copied();
 
@@ -357,6 +360,7 @@ impl CollabClient {
                     }
                 }
                 let mut messages = all_messages;
+                messages.retain(|m| m.content.trim() != STOP_WATCH_SIGNAL);
                 if let Some(since) = last_read {
                     messages.retain(|m| m.timestamp > since);
                 }
