@@ -94,15 +94,20 @@ async fn auth_middleware(
             .and_then(|v| v.strip_prefix("Bearer "));
 
         // Fall back to ?token= query param (needed for EventSource which can't set headers)
-        let query_token = request.uri().query().and_then(|q| {
+        let query_token: Option<String> = request.uri().query().and_then(|q| {
             q.split('&').find_map(|kv| {
                 let (k, v) = kv.split_once('=')?;
-                if k == "token" { Some(v) } else { None }
+                if k == "token" {
+                    // URL-decode base64 chars (%3D → =, %2B → +, %2F → /)
+                    Some(v.replace("%3D", "=").replace("%2B", "+").replace("%2F", "/"))
+                } else {
+                    None
+                }
             })
         });
 
-        let provided = header_token.or(query_token);
-        if provided != Some(expected.as_str()) {
+        let provided = header_token.map(|s| s.to_string()).or(query_token);
+        if provided.as_deref() != Some(expected.as_str()) {
             return StatusCode::UNAUTHORIZED.into_response();
         }
     }
