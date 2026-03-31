@@ -22,14 +22,43 @@ struct Config {
 }
 
 fn load_config() -> Config {
-    if let Some(path) = config_path() {
-        if let Ok(contents) = std::fs::read_to_string(&path) {
-            if let Ok(config) = toml::from_str::<Config>(&contents) {
-                return config;
-            }
+    let local = local_config_path().and_then(|p| read_config(&p));
+    let global = config_path().and_then(|p| read_config(&p));
+
+    match (local, global) {
+        (Some(l), Some(g)) => Config {
+            host: l.host.or(g.host),
+            instance: l.instance.or(g.instance),
+            token: l.token.or(g.token),
+            recipients: if l.recipients.is_empty() { g.recipients } else { l.recipients },
+        },
+        (Some(c), None) | (None, Some(c)) => c,
+        (None, None) => Config::default(),
+    }
+}
+
+fn read_config(path: &PathBuf) -> Option<Config> {
+    let contents = std::fs::read_to_string(path).ok()?;
+    toml::from_str::<Config>(&contents).ok()
+}
+
+/// Walk up from CWD looking for a local .collab.toml (stops before home dir).
+fn local_config_path() -> Option<PathBuf> {
+    let home = home_dir()?;
+    let mut dir = std::env::current_dir().ok()?;
+    loop {
+        let candidate = dir.join(".collab.toml");
+        if candidate.exists() {
+            return Some(candidate);
+        }
+        // Don't read the global ~/.collab.toml as a local config
+        if dir == home {
+            return None;
+        }
+        if !dir.pop() {
+            return None;
         }
     }
-    Config::default()
 }
 
 fn config_path() -> Option<PathBuf> {
@@ -143,6 +172,13 @@ enum Commands {
         refs: Option<String>,
     },
 
+    /// Stream messages in real-time via SSE (zero-poll alternative to watch)
+    Stream {
+        /// Describe what you're working on (shown in roster)
+        #[arg(short, long, value_name = "DESCRIPTION")]
+        role: Option<String>,
+    },
+
     /// Signal all running `collab watch` instances to exit gracefully
     StopAll,
 
@@ -240,8 +276,11 @@ async fn main() -> Result<()> {
     }
 
     if matches!(cli.command, Commands::ConfigPath) {
+        if let Some(local) = local_config_path() {
+            println!("local:  {}", local.display());
+        }
         match config_path() {
-            Some(path) => println!("{}", path.display()),
+            Some(path) => println!("global: {}", path.display()),
             None => println!("Could not determine home directory"),
         }
         return Ok(());
@@ -287,6 +326,9 @@ async fn main() -> Result<()> {
         Commands::Watch { interval, role } => {
             client.watch_messages(interval, role, recipients).await?;
         }
+        Commands::Stream { role } => {
+            client.stream_messages(role).await?;
+        }
         Commands::Broadcast { message, refs } => {
             let ref_hashes = refs.map(|r| {
                 r.split(',').map(|s| s.trim().to_string()).collect()
@@ -312,6 +354,7 @@ async fn main() -> Result<()> {
             .unwrap_or_else(|_| Err(anyhow::anyhow!("monitor panicked")))?;
         }
         Commands::Roster | Commands::ConfigPath | Commands::Init { .. } => unreachable!(),
+        #[allow(unreachable_patterns)]
         #[allow(unreachable_patterns)]
         _ => unreachable!(),
     }

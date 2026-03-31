@@ -385,6 +385,9 @@
     <label for="server-url">server</label>
     <input id="server-url" type="url" autocomplete="off" spellcheck="false"
            value="http://localhost:8000" aria-label="Collab server URL">
+    <label for="server-token">token</label>
+    <input id="server-token" type="password" autocomplete="off" spellcheck="false"
+           placeholder="(optional)" aria-label="Bearer token">
   </div>
   <button class="import-btn" id="import-btn" aria-label="Import config">
     <span aria-hidden="true">⬆</span> import config
@@ -870,6 +873,7 @@ function setPrefs(id, patch) {
 // ── State ─────────────────────────────────────────────────────────────────────
 const S = {
   url:         localStorage.getItem('collab-url') || 'http://localhost:8000',
+  token:       localStorage.getItem('collab-token') || '',
   workers:     [],
   histories:   {},
   colorMap:    {},   // id → hex string
@@ -880,6 +884,7 @@ const S = {
 };
 
 document.getElementById('server-url').value = S.url;
+document.getElementById('server-token').value = S.token;
 document.getElementById('compose-name').value = localStorage.getItem('collab-from') || '';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -930,7 +935,10 @@ function assignColor(id) {
 function workerStyle(id) { return getPrefs(id).style || 'robot'; }
 
 // ── API ───────────────────────────────────────────────────────────────────────
-async function api(path, opts) {
+async function api(path, opts = {}) {
+  if (S.token) {
+    opts.headers = { 'Authorization': `Bearer ${S.token}`, ...opts.headers };
+  }
   const r = await fetch(S.url.replace(/\/$/,'') + path, opts);
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json();
@@ -1778,12 +1786,19 @@ document.getElementById('import-file').addEventListener('change', e => {
   reader.readAsText(file); e.target.value = '';
 });
 
-// ── Server URL ────────────────────────────────────────────────────────────────
+// ── Server URL / Token ────────────────────────────────────────────────────────
 document.getElementById('server-url').addEventListener('change', e => {
   S.url = e.target.value.trim() || 'http://localhost:8000';
   localStorage.setItem('collab-url', S.url);
   S.histories = {}; S.workers = [];
   document.getElementById('feed').dataset.count = 0;
+  setConn('connecting');
+  startPolling();
+});
+
+document.getElementById('server-token').addEventListener('change', e => {
+  S.token = e.target.value.trim();
+  localStorage.setItem('collab-token', S.token);
   setConn('connecting');
   startPolling();
 });

@@ -29,7 +29,8 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     let db = db::init_db().await?;
-    let state = AppState { db, token: args.token.clone(), audit: args.audit };
+    let (tx, _) = tokio::sync::broadcast::channel(256);
+    let state = AppState { db, token: args.token.clone(), audit: args.audit, tx };
     let app = collab_server::create_app(state);
 
     let addr = format!("{}:{}", args.host, args.port);

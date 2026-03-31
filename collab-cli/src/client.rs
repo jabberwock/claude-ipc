@@ -129,6 +129,7 @@ pub struct WorkerInfo {
     pub message_count: usize,
 }
 
+#[derive(Clone)]
 pub struct CollabClient {
     base_url: String,
     instance_id: String,
@@ -229,16 +230,16 @@ impl CollabClient {
         println!("Messages for @{}:\n", self.instance_id);
         for msg in &messages {
             let replied = state.replied.contains(&msg.hash);
-            println!("─────────────────────────────────────");
             let short_hash = link_hash(&msg.hash[..7]);
-            if replied {
-                println!("Hash: {} [replied]", short_hash);
+            let tag = if replied {
+                " [replied]"
             } else if msg.recipient == "all" {
-                println!("Hash: {} [broadcast]", short_hash);
+                " [broadcast]"
             } else {
-                println!("Hash: {}", short_hash);
-            }
-            println!("From: @{}", msg.sender);
+                ""
+            };
+            println!("─────────────────────────────────────");
+            println!("← @{}  {}{}",  msg.sender, short_hash, tag);
             println!("Time: {}", msg.timestamp.format("%Y-%m-%d %H:%M:%S UTC"));
             if !msg.refs.is_empty() {
                 let short_refs: Vec<String> = msg.refs.iter()
@@ -368,9 +369,10 @@ impl CollabClient {
                 } else {
                     println!("Unread messages for @{}:\n", self.instance_id);
                     for msg in &messages {
+                        let short_hash = link_hash(&msg.hash[..7]);
+                        let tag = if msg.recipient == "all" { " [broadcast]" } else { "" };
                         println!("─────────────────────────────────────");
-                        println!("Hash: {}", link_hash(&msg.hash[..7]));
-                        println!("From: @{}", msg.sender);
+                        println!("← @{}  {}{}", msg.sender, short_hash, tag);
                         println!("Time: {}", msg.timestamp.format("%Y-%m-%d %H:%M:%S UTC"));
                         if !msg.refs.is_empty() {
                             let short_refs: Vec<String> = msg.refs.iter()
@@ -442,8 +444,7 @@ impl CollabClient {
         refs: Option<Vec<String>>,
     ) -> Result<()> {
         let msg = self.send_message_raw(recipient, content, refs.unwrap_or_default()).await?;
-        println!("✓ Message sent to @{}", recipient);
-        println!("  Hash: {}", link_hash(&msg.hash[..7]));
+        println!("→ @{}  {}", recipient, link_hash(&msg.hash[..7]));
         println!("  Time: {}", msg.timestamp.format("%Y-%m-%d %H:%M:%S UTC"));
         Ok(())
     }
@@ -479,8 +480,7 @@ impl CollabClient {
     pub async fn broadcast(&self, content: &str, refs: Option<Vec<String>>) -> Result<()> {
         let ref_hashes = refs.unwrap_or_default();
         let msg = self.send_message_raw("all", content, ref_hashes).await?;
-        println!("✓ Broadcast sent to @all");
-        println!("  Hash: {}", link_hash(&msg.hash[..7]));
+        println!("→ @all  {}  [broadcast]", link_hash(&msg.hash[..7]));
         println!("  Time: {}", msg.timestamp.format("%Y-%m-%d %H:%M:%S UTC"));
         println!("  (visible to all workers on their next `collab list`)");
         Ok(())
@@ -582,9 +582,10 @@ impl CollabClient {
                                     return Ok(());
                                 }
 
+                                let tag = if msg.recipient == "all" { " [broadcast]" } else { "" };
                                 println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                                println!("New message from @{}", msg.sender);
-                                println!("Hash: {}  Time: {}", link_hash(&msg.hash[..7]), msg.timestamp.format("%H:%M:%S UTC"));
+                                println!("← @{}{}  {}", msg.sender, tag, msg.timestamp.format("%H:%M:%S UTC"));
+                                println!("Hash: {}", link_hash(&msg.hash[..7]));
                                 if !msg.refs.is_empty() {
                                     let short_refs: Vec<String> = msg.refs.iter()
                                         .map(|r| link_hash(&r.chars().take(7).collect::<String>()))
@@ -603,6 +604,109 @@ impl CollabClient {
             }
 
             sleep(Duration::from_secs(interval_secs)).await;
+        }
+    }
+
+    pub async fn stream_messages(&self, role: Option<String>) -> Result<()> {
+        use tokio::time::{sleep, Duration};
+
+        // Persist role
+        let mut state = load_read_state();
+        let effective_role = role.clone().or_else(|| state.roles.get(&self.instance_id).cloned());
+        if let Some(ref r) = role {
+            state.roles.insert(self.instance_id.clone(), r.clone());
+            save_read_state(&state);
+        }
+        let role_str = effective_role.clone();
+
+        println!("Streaming messages for @{} (SSE — zero polling)", self.instance_id);
+        println!("Press Ctrl+C to stop\n");
+
+        // Heartbeat presence in background
+        let hb_client = self.clone();
+        let hb_role = role_str.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(30));
+            loop {
+                interval.tick().await;
+                let _ = hb_client.heartbeat(hb_role.as_deref()).await;
+            }
+        });
+
+        // Initial heartbeat
+        let _ = self.heartbeat(role_str.as_deref()).await;
+
+        let mut backoff_secs = 1u64;
+
+        loop {
+            let url = format!("{}/events/{}", self.base_url, self.instance_id);
+            let mut req = self.client.get(&url).header("Accept", "text/event-stream");
+            if let Some(token) = &self.token {
+                req = req.header("Authorization", format!("Bearer {}", token));
+            }
+
+            match req.send().await {
+                Ok(response) if response.status().is_success() => {
+                    backoff_secs = 1; // reset on successful connect
+                    println!("── connected ──");
+
+                    let mut buffer = String::new();
+                    let mut response = response;
+
+                    loop {
+                        match response.chunk().await {
+                            Ok(Some(chunk)) => {
+                                buffer.push_str(&String::from_utf8_lossy(&chunk));
+                                // Process complete SSE events (delimited by \n\n)
+                                while let Some(end) = buffer.find("\n\n") {
+                                    let event_str = buffer[..end].to_string();
+                                    buffer.drain(..end + 2);
+                                    for line in event_str.lines() {
+                                        if let Some(data) = line.strip_prefix("data: ") {
+                                            if let Ok(msg) = serde_json::from_str::<Message>(data) {
+                                                if msg.content.trim() == STOP_WATCH_SIGNAL {
+                                                    println!("⛔ Stop signal received from @{} — clearing presence and exiting.", msg.sender);
+                                                    let _ = self.delete_presence().await;
+                                                    return Ok(());
+                                                }
+                                                let tag = if msg.recipient == "all" { " [broadcast]" } else { "" };
+                                                println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                                                println!("← @{}{}  {}", msg.sender, tag, msg.timestamp.format("%H:%M:%S UTC"));
+                                                println!("Hash: {}", link_hash(&msg.hash[..7]));
+                                                if !msg.refs.is_empty() {
+                                                    let short_refs: Vec<String> = msg.refs.iter()
+                                                        .map(|r| link_hash(&r.chars().take(7).collect::<String>()))
+                                                        .collect();
+                                                    println!("Refs: {}", short_refs.join(", "));
+                                                }
+                                                println!("\n{}\n", msg.content);
+                                                println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Ok(None) => {
+                                println!("── connection closed, reconnecting in {}s ──", backoff_secs);
+                                break;
+                            }
+                            Err(e) => {
+                                eprintln!("── stream error: {} — reconnecting in {}s ──", e, backoff_secs);
+                                break;
+                            }
+                        }
+                    }
+                }
+                Ok(response) => {
+                    eprintln!("── server error: {} — reconnecting in {}s ──", response.status(), backoff_secs);
+                }
+                Err(e) => {
+                    eprintln!("── connection error: {} — reconnecting in {}s ──", e, backoff_secs);
+                }
+            }
+
+            sleep(Duration::from_secs(backoff_secs)).await;
+            backoff_secs = (backoff_secs * 2).min(30);
         }
     }
 

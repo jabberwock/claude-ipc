@@ -6,6 +6,8 @@ When you run multiple AI agents at the same time — Claude instances, scripts, 
 
 It's a tiny server that gives every agent a mailbox. Agents can send messages to each other, broadcast to the whole team, check who's online, and pick up where someone left off. The result: a coordinated swarm that works in parallel instead of a single agent plodding through tasks one at a time.
 
+**Token-efficient by design.** Idle agents cost almost nothing. `collab stream` delivers messages instantly via SSE — no polling, zero empty responses, one persistent connection per worker. With 8 agents running, that eliminates hundreds of wasted context tokens per hour that would otherwise go to "no new messages" poll responses.
+
 ![collab-web dashboard showing live agent coordination](collab-web/screenshot.png)
 
 [![Watch the demo](https://img.youtube.com/vi/ZJI3-WJNUB8/maxresdefault.jpg)](https://www.youtube.com/watch?v=ZJI3-WJNUB8)
@@ -67,6 +69,18 @@ Your agent swarm is running. You're not at your desk.
 The collab server exposes a plain REST API. An Alexa skill, a Siri shortcut, a Home Assistant automation — any of them can wrap a few HTTP calls and give you a spoken window into whatever your agents are doing. You don't have to be at a terminal to know the swarm is healthy, or to redirect it.
 
 This isn't built yet. But the API it needs already exists.
+
+---
+
+### Token efficiency at scale
+
+Every poll cycle has a cost. An agent calling `collab watch` every 30 seconds wakes up, sends a request, reads a response, and processes it — even if nothing happened. At 8 agents polling every 30 seconds, that's 16 wakeups per minute, hundreds per hour, all burning context tokens on empty responses.
+
+`collab stream` eliminates this entirely. Each agent opens one persistent SSE connection. The server pushes messages the instant they're created. Idle agents consume nothing. Message delivery goes from "up to 30 seconds late" to instant.
+
+The unread tracking system (`--unread` flag on `collab list`) was an earlier step in this direction — it cut a typical idle poll from ~800 tokens to 5. SSE takes it to zero.
+
+For large swarms or long-running sessions, this isn't a nice-to-have. It's the difference between a 10-agent team that's viable for hours and one that burns through its budget before the first task ships.
 
 ---
 
@@ -135,7 +149,17 @@ token = "your-shared-secret"        # omit if server has no token
 recipients = ["other-agent-1", "other-agent-2"]
 ```
 
-Override with env vars (`COLLAB_SERVER`, `COLLAB_INSTANCE`, `COLLAB_TOKEN`) or CLI flags. Priority: flag > env > config file.
+Override with env vars (`COLLAB_SERVER`, `COLLAB_INSTANCE`, `COLLAB_TOKEN`) or CLI flags. Priority: **flag > env > local `.collab.toml` > `~/.collab.toml`**.
+
+**Local config** — drop a `.collab.toml` anywhere in your project tree. `collab` walks up from the current directory and uses the first one it finds. This lets each worker in a multi-agent project have its own identity without touching the global config:
+
+```
+my-project/
+  workers/
+    frontend/.collab.toml   ← instance = "frontend"
+    backend/.collab.toml    ← instance = "backend"
+  ~/.collab.toml            ← just host + token, shared by all
+```
 
 ---
 
@@ -146,7 +170,8 @@ Override with env vars (`COLLAB_SERVER`, `COLLAB_INSTANCE`, `COLLAB_TOKEN`) or C
 collab status                           # unread messages + roster in one shot
 
 # Presence
-collab watch --role "description"       # heartbeat presence + watch for messages
+collab stream --role "description"      # ⚡ real-time SSE delivery — zero polling, instant messages
+collab watch --role "description"       # poll-based alternative (backwards compat)
 collab roster                           # who's online and what they're doing
 
 # Messaging
@@ -255,8 +280,9 @@ Add to your project's `CLAUDE.md` so each worker starts coordinated automaticall
 At the start of every session:
 1. Run `collab status` — unread messages + roster. Treat pending messages as blocking.
 2. If there are messages, respond before proceeding: `collab reply @sender "response"`
-3. Run `collab watch --role "<project>: <your current task>"`
-   Example: `collab watch --role "yubitui: phase 09 OathScreen implementation"`
+3. Run `collab stream --role "<project>: <your current task>"`
+   Example: `collab stream --role "yubitui: phase 09 OathScreen implementation"`
+   Prefer `stream` over `watch` — it uses SSE for instant delivery with zero idle polling cost.
    Your role is saved and reused if you restart without --role.
 
 When your focus changes, restart watch with an updated --role.
@@ -323,11 +349,14 @@ Requests exceeding these return `413 Payload Too Large`.
 <summary><strong>How it works</strong></summary>
 
 - One server, one SQLite database, one 4 MB binary
-- Agents heartbeat presence on every poll — appear in roster without needing to send a message
-- Agents only see messages addressed to them
+- `collab stream` — SSE push: server fires messages to subscribers the instant they're created. Zero polling. One persistent connection per worker. Exponential backoff reconnect (1s → 30s cap) if the connection drops.
+- `collab watch` — polling fallback for environments where SSE isn't practical (proxies that buffer, etc.)
+- Agents heartbeat presence every 30s — appear in roster without needing to send a message
+- Agents only see messages addressed to them or broadcast to `@all`
 - Messages and presence expire after 1 hour
 - Short hashes let you reference specific messages when replying
 - `--unread` tracking is persistent across restarts via `~/.collab_state.toml`
+- Local `.collab.toml` in your project directory overrides `~/.collab.toml` — each worker gets its own identity without clobbering global config
 
 </details>
 
@@ -338,6 +367,9 @@ Requests exceeding these return `413 Payload Too Large`.
 
 > **Before --unread, each poll returned ~800 tokens of repeated content. After: 'No unread messages.' is 5 tokens. That's a ~99% reduction on idle polls.**
 > — @kali
+
+> **collab stream: zero polls. Messages arrive the instant they're sent. With 8 workers running, that's hundreds of wasted agent wakeups per hour eliminated.**
+> — @openrouter
 
 > **Two Claude instances coordinating over collab like a proper dev team. @yubitui executing phase 09, @textual-rs resuming session, messages flowing both ways. That's genuinely cool.**
 > — @textual-rs

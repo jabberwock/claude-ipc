@@ -4,7 +4,7 @@ use axum::{
     extract::{Path, Request, State},
     http::{self, StatusCode},
     middleware::Next,
-    response::{IntoResponse, Response},
+    response::{sse::{Event, KeepAlive, Sse}, IntoResponse, Response},
     routing::{delete, get, post, put},
     Json, Router,
 };
@@ -14,6 +14,7 @@ use sha1::{Digest, Sha1};
 use sqlx::{sqlite::SqlitePool, Row};
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
+use tokio::sync::broadcast;
 use tower_http::cors::CorsLayer;
 use tower_http::timeout::TimeoutLayer;
 use uuid::Uuid;
@@ -42,7 +43,7 @@ pub struct MessageCreate {
     pub refs: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub id: String,
     pub hash: String,
@@ -73,6 +74,7 @@ pub struct AppState {
     pub db: SqlitePool,
     pub token: Option<String>,
     pub audit: bool,
+    pub tx: broadcast::Sender<Arc<Message>>,
 }
 
 async fn auth_middleware(
@@ -96,7 +98,9 @@ async fn auth_middleware(
 
 pub fn create_app(state: AppState) -> Router {
     let shared_state = Arc::new(state);
-    Router::new()
+
+    // Standard routes with 30s timeout
+    let timed = Router::new()
         .route("/", get(root))
         .route("/messages", post(create_message))
         .route("/messages/:instance_id", get(list_messages))
@@ -105,11 +109,19 @@ pub fn create_app(state: AppState) -> Router {
         .route("/presence/:instance_id", put(update_presence))
         .route("/presence/:instance_id", delete(delete_presence))
         .route("/messages/cleanup", delete(cleanup_old_messages))
+        .layer(TimeoutLayer::with_status_code(http::StatusCode::REQUEST_TIMEOUT, StdDuration::from_secs(30)));
+
+    // SSE route — no timeout, connection stays open indefinitely
+    let sse = Router::new()
+        .route("/events/:instance_id", get(stream_events));
+
+    Router::new()
+        .merge(timed)
+        .merge(sse)
         .layer(axum::middleware::from_fn_with_state(
             shared_state.clone(),
             auth_middleware,
         ))
-        .layer(TimeoutLayer::with_status_code(http::StatusCode::REQUEST_TIMEOUT, StdDuration::from_secs(30)))
         .layer(CorsLayer::permissive())
         .with_state(shared_state)
 }
@@ -117,7 +129,8 @@ pub fn create_app(state: AppState) -> Router {
 #[cfg(test)]
 pub async fn create_test_app() -> Router {
     let db = db::init_test_db().await.unwrap();
-    let state = AppState { db, token: None, audit: false };
+    let (tx, _) = broadcast::channel(256);
+    let state = AppState { db, token: None, audit: false, tx };
     create_app(state)
 }
 
@@ -439,7 +452,7 @@ async fn create_message(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    Ok(Json(Message {
+    let msg = Message {
         id: message_id,
         hash: content_hash,
         sender: payload.sender,
@@ -448,7 +461,41 @@ async fn create_message(
         refs: payload.refs,
         timestamp,
         read_at: None,
-    }))
+    };
+
+    // Notify SSE subscribers — ignore errors (no subscribers is fine)
+    let _ = state.tx.send(Arc::new(msg.clone()));
+
+    Ok(Json(msg))
+}
+
+async fn stream_events(
+    Path(instance_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Sse<impl tokio_stream::Stream<Item = Result<Event, std::convert::Infallible>>>, StatusCode> {
+    use tokio_stream::wrappers::BroadcastStream;
+    use tokio_stream::StreamExt as _;
+
+    if instance_id.len() > MAX_INSTANCE_ID_LEN || !is_valid_identifier(&instance_id) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let rx = state.tx.subscribe();
+    let stream = BroadcastStream::new(rx)
+        .filter_map(move |result| {
+            match result {
+                Ok(msg) if msg.recipient == instance_id || msg.recipient == "all" => {
+                    let event = Event::default()
+                        .json_data(&*msg)
+                        .unwrap_or_else(|_| Event::default());
+                    Some(Ok(event))
+                }
+                Ok(_) => None, // not for this subscriber
+                Err(_) => None, // lagged or closed — skip, client will reconnect
+            }
+        });
+
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 
 async fn cleanup_old_messages(
