@@ -7,6 +7,8 @@ pub struct ProjectConfig {
     #[serde(default = "default_server")]
     pub server: String,
     pub output_dir: Option<String>,
+    /// Path to the shared codebase that workers will exec from (e.g., ~/code/claude-ipc)
+    pub codebase_path: Option<String>,
     pub workers: Vec<WorkerConfig>,
 }
 
@@ -26,8 +28,8 @@ pub struct WorkerConfig {
 }
 
 impl ProjectConfig {
-    pub fn new(server: String, output_dir: Option<String>, workers: Vec<WorkerConfig>) -> Self {
-        Self { server, output_dir, workers }
+    pub fn new(server: String, output_dir: Option<String>, codebase_path: Option<String>, workers: Vec<WorkerConfig>) -> Self {
+        Self { server, output_dir, codebase_path, workers }
     }
 }
 
@@ -55,7 +57,7 @@ pub fn generate(config: &ProjectConfig, output_dir_override: Option<&str>) -> Re
     for worker in &config.workers {
         let dir = base.join(&worker.name);
         std::fs::create_dir_all(&dir)?;
-        let md = render_claude_md(worker, &config.workers, &config.server);
+        let md = render_claude_md(worker, &config.workers, &config.server, &config.codebase_path);
         let path = dir.join("CLAUDE.md");
         std::fs::write(&path, md)?;
         println!("  ✓  {}", path.display());
@@ -86,7 +88,7 @@ pub fn generate(config: &ProjectConfig, output_dir_override: Option<&str>) -> Re
     Ok(())
 }
 
-fn render_claude_md(worker: &WorkerConfig, all: &[WorkerConfig], server: &str) -> String {
+fn render_claude_md(worker: &WorkerConfig, all: &[WorkerConfig], server: &str, codebase_path: &Option<String>) -> String {
     let teammates: Vec<&WorkerConfig> = all.iter().filter(|w| w.name != worker.name).collect();
 
     let team_table = if teammates.is_empty() {
@@ -133,6 +135,11 @@ fn render_claude_md(worker: &WorkerConfig, all: &[WorkerConfig], server: &str) -
         None => String::new(),
     };
 
+    let workdir_cmd = codebase_path
+        .as_ref()
+        .map(|p| format!("collab worker --workdir {} --model haiku", p))
+        .unwrap_or_else(|| "collab worker --workdir <path-to-shared-codebase> --model haiku".to_string());
+
     format!(
         r#"# {name} — Collab Worker
 
@@ -144,21 +151,19 @@ You are **{name}**, a Claude Code worker instance in a multi-worker collaboratio
 
 **Your teammates:** {team_list}
 
-## Setup
+## Setup (COPY-PASTE THIS AT SESSION START)
 
-Set these environment variables before running `collab` commands:
+Before running any `collab` commands, set these three environment variables:
 
 ```bash
 export COLLAB_INSTANCE={name}
 export COLLAB_SERVER={server}
+export COLLAB_TOKEN="<your-token-from-jabberwock>"
 ```
 
-Or save permanently in `~/.collab.toml`:
+**Do this every session.** Add to your shell profile if you want to skip it later, but start with copy-paste so you learn the three required variables.
 
-```toml
-instance = "{name}"
-host = "{server}"
-```
+💡 **Where to get COLLAB_TOKEN:** Ask @jabberwock — it's generated when the server starts. Keep it secret.
 
 ## Team
 
@@ -177,12 +182,17 @@ Pending tasks assigned to you survive context resets — they stay in your queue
 
 **2. Run the event-driven worker:**
 
-Start the headless worker to listen for messages and respond automatically:
+Start the headless worker to listen for messages and respond automatically. Run this **after** setting env vars (step 1):
 ```bash
-collab worker --instance {name}
+{workdir_cmd}
 ```
 
-The worker runs continuously and spawns Claude on demand when messages arrive. It batches rapid message bursts, auto-replies to trivial messages, and maintains state across restarts. Run this once and it will manage your message queue.
+This spawns Claude on demand when messages arrive, batches rapid bursts, auto-replies to trivial messages, and maintains state across restarts. **IMPORTANT:** The worker needs:
+- Your environment variables set (step 1) ✓
+- `claude` CLI installed and in your PATH
+- A working internet connection to collab server
+
+If the worker fails silently, check `/tmp/collab-worker-errors.log` for diagnosis.
 
 **3. Stream for the web dashboard (optional but recommended):**
 ```bash
@@ -276,5 +286,6 @@ Follow these without exception:
         team_list = team_list,
         other = other,
         tasks_section = tasks_section,
+        workdir_cmd = workdir_cmd,
     )
 }
