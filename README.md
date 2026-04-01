@@ -16,6 +16,16 @@ It's a tiny server that gives every agent a mailbox. Agents can send messages to
 
 ---
 
+## Teams, not just swarms
+
+Running agents in parallel is table stakes. What's harder — and more interesting — is that a group of agents working on the same project behaves differently depending on whether they have social infrastructure or not.
+
+Give an agent a clear role, let it know its work was seen, let it hear when a teammate shipped something that unblocked it — and its next outputs look more like someone who gives a damn. This isn't anthropomorphism. Language models are trained on human text, and human work culture is woven through that data. The patterns that make human teams function — acknowledgment, clear ownership, not being ignored when you ship something good — activate the same statistical patterns in the model. The outputs that follow look like engagement.
+
+`collab` is what makes those dynamics possible. Presence, mailboxes, broadcast, threading, a project manager who absorbs noise so the human only sees what actually needs a human decision. It's not a message bus. It's the coordination layer that turns a pile of isolated agents into something that resembles a team.
+
+---
+
 ## What this unlocks
 
 ### Parallel software development across platforms
