@@ -80,6 +80,55 @@ impl WorkerHarness {
     }
 
     pub async fn run(&self) -> Result<()> {
+        // Spawn batch processor task that wakes on timer
+        let queue = self.message_queue.clone();
+        let first_time = self.first_message_time.clone();
+        let batch_wait_ms = self.batch_wait_ms;
+        let client = self.client.clone();
+        let instance_id = self.instance_id.clone();
+        let workdir = self.workdir.clone();
+        let model = self.model.clone();
+        let auto_reply = self.auto_reply;
+
+        tokio::spawn(async move {
+            loop {
+                sleep(Duration::from_millis(batch_wait_ms)).await;
+
+                // Check if queue has messages and batch window has passed
+                let should_process = {
+                    let q = queue.lock().await;
+                    if q.is_empty() {
+                        false
+                    } else if let Some(first) = *first_time.lock().await {
+                        first.elapsed() >= Duration::from_millis(batch_wait_ms)
+                    } else {
+                        false
+                    }
+                };
+
+                if should_process {
+                    let messages = {
+                        let mut q = queue.lock().await;
+                        std::mem::take(&mut *q)
+                    };
+                    *first_time.lock().await = None;
+
+                    // Process messages
+                    let harness = WorkerHarness {
+                        client: client.clone(),
+                        instance_id: instance_id.clone(),
+                        workdir: workdir.clone(),
+                        model: model.clone(),
+                        auto_reply,
+                        batch_wait_ms,
+                        message_queue: Arc::new(Mutex::new(Vec::new())),
+                        first_message_time: Arc::new(Mutex::new(None)),
+                    };
+                    let _ = harness.spawn_claude(&messages).await;
+                }
+            }
+        });
+
         let mut backoff_secs = 1u64;
 
         loop {
@@ -119,11 +168,6 @@ impl WorkerHarness {
                                                         *self.first_message_time.lock().await = Some(Instant::now());
                                                     }
                                                 }
-
-                                                // Check if we should spawn claude now
-                                                if self.should_spawn().await {
-                                                    self.handle_messages().await.ok();
-                                                }
                                             }
                                         }
                                     }
@@ -151,52 +195,6 @@ impl WorkerHarness {
             sleep(Duration::from_secs(backoff_secs)).await;
             backoff_secs = (backoff_secs * 2).min(30);
         }
-    }
-
-    async fn should_spawn(&self) -> bool {
-        let queue = self.message_queue.lock().await;
-        if queue.is_empty() {
-            return false;
-        }
-
-        // Check if batch_wait has elapsed since first message
-        if let Some(first_time) = *self.first_message_time.lock().await {
-            first_time.elapsed() >= Duration::from_millis(self.batch_wait_ms)
-        } else {
-            false
-        }
-    }
-
-    async fn handle_messages(&self) -> Result<()> {
-        let messages = {
-            let mut queue = self.message_queue.lock().await;
-            let msgs = std::mem::take(&mut *queue);
-            *self.first_message_time.lock().await = None;
-            msgs
-        };
-
-        if messages.is_empty() {
-            return Ok(());
-        }
-
-        let senders: Vec<String> = messages.iter().map(|m| format!("@{}", m.sender)).collect();
-        let sender_str = senders.join(", ");
-
-        self.log(&format!("wake — {} message(s) from {} → spawning claude", messages.len(), sender_str));
-
-        // Check for trivial replies
-        for msg in &messages {
-            if self.auto_reply && self.is_trivial_reply(&msg.content) {
-                self.log(&format!("auto — trivial reply to @{}", msg.sender));
-                let _ = self.client.add_message(&msg.sender, &format!("@{} ack", msg.sender), None).await;
-                continue;
-            }
-        }
-
-        // Handle messages via claude
-        self.spawn_claude(&messages).await?;
-
-        Ok(())
     }
 
     fn is_trivial_reply(&self, content: &str) -> bool {
