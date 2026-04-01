@@ -228,6 +228,16 @@ collab todo add @{name} "description"
 
 **Rule:** Always check `collab todo list` at session start. Mark tasks done *before* starting the next one. A task is not done until you run `collab todo done` — acknowledged ≠ complete.
 
+**When assigning work to a teammate, always use `collab todo add` — not just a message.** Messages expire and get lost on context reset. Todos persist until marked done.
+
+```bash
+# Assign a task (use this instead of just messaging)
+collab todo add @{other} "implement the /api/users endpoint"
+
+# Then optionally send a message with context
+collab add @{other} "Added a todo for you — see collab todo list for details"
+```
+
 ## Rules
 
 Follow these without exception:
