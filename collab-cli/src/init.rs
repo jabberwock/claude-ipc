@@ -175,19 +175,21 @@ collab todo list
 
 Pending tasks assigned to you survive context resets — they stay in your queue until you explicitly mark them done.
 
-**2. Set up your message poll (this wakes your Claude session when messages arrive):**
-```
-/loop 1m collab list
+**2. Poll for messages on a schedule:**
+
+Use `/loop` to check for new messages periodically:
+```bash
+/loop 5m collab list
 ```
 
-This injects `collab list` as a prompt every minute — the only mechanism that delivers messages into your Claude session.
+This polls every 5 minutes and only injects messages if there are new ones. Adjust the interval as needed.
 
 **3. Stream for the web dashboard (optional but recommended):**
 ```bash
 collab stream --role "{role}"
 ```
 
-Keeps your role visible in the roster and feeds the web dashboard. Does NOT inject messages into your session — the cron loop above handles that.
+Keeps your role visible in the roster and feeds the web dashboard.
 
 **4. Stop condition:**
 
