@@ -97,7 +97,7 @@ collab todo list                        # your pending tasks (also shown in coll
 collab todo done <hash>                 # mark complete when finished — do this before moving on
 ```
 
-Teammates or @jabberwock assign tasks with:
+Teammates or @human assign tasks with:
 ```bash
 collab todo add @e2e-tester "description"
 ```

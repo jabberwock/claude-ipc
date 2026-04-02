@@ -184,7 +184,7 @@ Before running any `collab` commands, set these three environment variables:
 ```bash
 export COLLAB_INSTANCE={name}
 export COLLAB_SERVER={server}
-export COLLAB_TOKEN="<your-token-from-jabberwock>"
+export COLLAB_TOKEN="<your-token-from-human>"
 ```
 
 **Do this every session.** Add to your shell profile if you want to skip it later, but start with copy-paste so you learn the three required variables.
@@ -259,7 +259,7 @@ collab todo list                        # your pending tasks (also shown in coll
 collab todo done <hash>                 # mark complete when finished — do this before moving on
 ```
 
-Teammates or @jabberwock assign tasks with:
+Teammates or @human assign tasks with:
 ```bash
 collab todo add @{name} "description"
 ```
