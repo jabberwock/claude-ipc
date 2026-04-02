@@ -91,6 +91,13 @@ pub fn spawn_worker(
         cmd.env("COLLAB_TOKEN", token);
     }
 
+    // Make worker a process group leader so we can kill it + children together
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+
     // Spawn in background
     let child = cmd.spawn()
         .map_err(|e| anyhow!("Failed to spawn collab worker for '{}': {}", name, e))?;
@@ -187,16 +194,15 @@ pub fn kill_process(pid: u32, name: &str) -> Result<()> {
     #[cfg(unix)]
     {
         unsafe {
-            // First try SIGTERM (graceful)
-            libc::kill(pid as i32, libc::SIGTERM);
+            // Kill the process group (negative PID) to get worker + child claude processes
+            libc::kill(-(pid as i32), libc::SIGTERM);
         }
         std::thread::sleep(std::time::Duration::from_millis(500));
 
         // Check if still running
         if process_exists(pid) {
             unsafe {
-                // Force kill with SIGKILL
-                libc::kill(pid as i32, libc::SIGKILL);
+                libc::kill(-(pid as i32), libc::SIGKILL);
             }
         }
     }
