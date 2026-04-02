@@ -1034,8 +1034,13 @@ function renderFeed() {
   const me    = document.getElementById('compose-name').value.trim();
   const all   = getAllMsgs();
 
-  // Update @mentions badge with count of messages addressed to me
-  const mentionCount = me ? all.filter(m => m.recipient === me).length : 0;
+  // Update @mentions badge — only count unseen mentions
+  if (!S._seenMentions) S._seenMentions = new Set();
+  const myMentions = me ? all.filter(m => m.recipient === me || m.recipient === 'all') : [];
+  const unseenMentions = myMentions.filter(m => !S._seenMentions.has(m.id));
+  // If we're viewing mentions tab, mark all as seen
+  if (S.inboxMode) myMentions.forEach(m => S._seenMentions.add(m.id));
+  const mentionCount = S.inboxMode ? 0 : unseenMentions.length;
   const badge = document.getElementById('inbox-badge');
   badge.textContent = mentionCount || '';
 
@@ -1872,7 +1877,8 @@ async function pollTodos() {
   if (!S.workers.length) return;
   await Promise.allSettled(S.workers.map(w => loadTodos(w.instance_id)));
   const total = Object.values(S.todos).reduce((n, arr) => n + arr.length, 0);
-  document.getElementById('tasks-badge').textContent = total || '';
+  // Hide badge when viewing tasks tab
+  document.getElementById('tasks-badge').textContent = (S.tabMode === 'todos') ? '' : (total || '');
   if (S.tabMode === 'todos') renderTodos();
 }
 
