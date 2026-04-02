@@ -311,10 +311,10 @@ Previous state:
 Messages ({}):
 {}
 
-Instructions: Act on the messages above. Use Bash/Read/Write/Edit to do your actual work (coding, research, testing). When done, output a JSON block between ---COLLAB_OUTPUT--- and ---END_COLLAB_OUTPUT--- markers:
+Act on the messages above. Use Bash/Read/Write/Edit to do your actual work (coding, research, testing).
 
-```
----COLLAB_OUTPUT---
+When done, your FINAL output must be ONLY a JSON object (no other text before or after):
+
 {{
   \"response\": \"your reply to the sender (string or null)\",
   \"delegate\": [{{\"to\": \"@worker\", \"task\": \"description\"}}],
@@ -322,14 +322,13 @@ Instructions: Act on the messages above. Use Bash/Read/Write/Edit to do your act
   \"continue\": false,
   \"state_update\": {{\"key\": \"value\"}}
 }}
----END_COLLAB_OUTPUT---
-```
 
-- \"response\": message back to whoever messaged you
-- \"delegate\": assign new tasks to teammates
-- \"completed_tasks\": list task hashes you finished (from your pending tasks above). The harness will mark them done and auto-route your output to downstream workers.
-- \"continue\": set true to keep working — the harness will re-invoke you immediately with your output as context. Use this when you have more work to do. Set false when you're blocked or done.
-- \"state_update\": persist any state for your next invocation
+Fields:
+- response: message back to whoever messaged you
+- delegate: assign new tasks to teammates (optional, default [])
+- completed_tasks: task hashes you finished from your pending tasks (optional, default [])
+- continue: true to keep working, false when blocked or done
+- state_update: any state to persist for your next invocation (optional, default {{}})
 
 Do NOT run any collab CLI commands. The harness handles all messaging and task delivery. Focus on your actual work.",
             self.instance_id,
@@ -471,9 +470,11 @@ Do NOT run any collab CLI commands. The harness handles all messaging and task d
     }
 
     fn parse_collab_output(&self, output: &str) -> Option<CollabOutput> {
-        let start = output.find("---COLLAB_OUTPUT---")?;
-        let end = output.find("---END_COLLAB_OUTPUT---")?;
-        let json_str = &output[start + 19..end].trim();
+        // Find the first { and last } — extract JSON from any surrounding text
+        let start = output.find('{')?;
+        let end = output.rfind('}')?;
+        if end <= start { return None; }
+        let json_str = &output[start..=end];
         serde_json::from_str(json_str).ok()
     }
 
