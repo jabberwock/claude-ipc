@@ -150,6 +150,16 @@ impl WorkerHarness {
             }
         });
 
+        // Heartbeat presence every 30s
+        let hb_client = self.client.clone();
+        let hb_role = self.get_role();
+        tokio::spawn(async move {
+            loop {
+                let _ = hb_client.heartbeat(Some(&hb_role)).await;
+                sleep(Duration::from_secs(30)).await;
+            }
+        });
+
         // Auto-kick: send self a boot message so workers start immediately
         if let Err(e) = self.client.add_message(&self.instance_id, "Session start. You MUST check your pending tasks and start working on them immediately. Set continue:true in your output to keep working through your task list. Only set continue:false when you are genuinely blocked on someone else or have zero tasks left.", None).await {
             self.log_error(&format!("Failed to send boot message: {}", e));
