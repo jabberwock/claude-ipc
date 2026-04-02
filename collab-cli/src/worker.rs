@@ -11,6 +11,7 @@ use tokio::time::{sleep, Duration, Instant};
 use crate::client::CollabClient;
 
 const TRIVIAL_REPLY_PATTERN: &str = r"(?i)^(acknowledged|got it|thanks|thank you|ok|okay|will do|on it|roger)$";
+pub const DEFAULT_CLI_TEMPLATE: &str = "claude -p {prompt} --model {model} --allowedTools Bash,Read,Write,Edit";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
@@ -76,6 +77,8 @@ pub struct WorkerHarness {
     instance_id: String,
     workdir: PathBuf,
     model: String,
+    /// CLI command template with {prompt}, {model}, {workdir} placeholders
+    cli_template: String,
     auto_reply: bool,
     batch_wait_ms: u64,
     message_queue: Arc<Mutex<Vec<Message>>>,
@@ -92,6 +95,7 @@ impl WorkerHarness {
         instance_id: String,
         workdir: PathBuf,
         model: String,
+        cli_template: Option<String>,
         auto_reply: bool,
         batch_wait_ms: u64,
         hands_off_to: Vec<String>,
@@ -102,6 +106,7 @@ impl WorkerHarness {
             instance_id,
             workdir,
             model,
+            cli_template: cli_template.unwrap_or_else(|| DEFAULT_CLI_TEMPLATE.to_string()),
             auto_reply,
             batch_wait_ms,
             message_queue: Arc::new(Mutex::new(Vec::new())),
@@ -123,6 +128,7 @@ impl WorkerHarness {
         let instance_id = self.instance_id.clone();
         let workdir = self.workdir.clone();
         let model = self.model.clone();
+        let cli_template = self.cli_template.clone();
         let auto_reply = self.auto_reply;
         let hands_off_to = self.hands_off_to.clone();
         let teammates = self.teammates.clone();
@@ -175,6 +181,7 @@ impl WorkerHarness {
                         instance_id: instance_id.clone(),
                         workdir: workdir.clone(),
                         model: model.clone(),
+                        cli_template: cli_template.clone(),
                         auto_reply,
                         batch_wait_ms,
                         message_queue: Arc::new(Mutex::new(Vec::new())),
@@ -405,14 +412,33 @@ Do NOT run any collab CLI commands. The harness handles all messaging and task d
             msg_lines
         );
 
-        // Spawn claude — strip COLLAB_* env vars so it can't shell out to collab CLI
-        let mut cmd = Command::new("claude");
-        cmd.arg("-p")
-            .arg(&prompt)
-            .arg("--model")
-            .arg(&self.model)
-            .arg("--allowedTools")
-            .arg("Bash,Read,Write,Edit")
+        // Validate: catch unconfigured placeholder from collab init
+        if self.cli_template.contains("{agent}") {
+            return Err(anyhow::anyhow!(
+                "cli_template still contains {{agent}} placeholder — you need to configure it.\n\
+                 Edit .collab/workers.json or workers.yaml and replace {{agent}} with your CLI tool.\n\
+                 Examples:\n\
+                 \x20 claude -p {{prompt}} --model {{model}} --allowedTools Bash,Read,Write,Edit\n\
+                 \x20 cursor -p {{prompt}} --model {{model}}\n\
+                 \x20 ollama run {{model}} {{prompt}}"
+            ));
+        }
+
+        // Build command from cli_template — replace {prompt}, {model}, {workdir} placeholders
+        let expanded = self.cli_template
+            .replace("{prompt}", &prompt)
+            .replace("{model}", &self.model)
+            .replace("{workdir}", &self.workdir.to_string_lossy());
+
+        let parts = shlex::split(&expanded).ok_or_else(|| {
+            anyhow::anyhow!("Invalid cli_template (bad quoting): {}", self.cli_template)
+        })?;
+        if parts.is_empty() {
+            return Err(anyhow::anyhow!("cli_template expanded to empty command"));
+        }
+
+        let mut cmd = Command::new(&parts[0]);
+        cmd.args(&parts[1..])
             .current_dir(&self.workdir);
 
         // Remove collab env vars from subprocess — harness handles all communication
@@ -424,7 +450,7 @@ Do NOT run any collab CLI commands. The harness handles all messaging and task d
         {
             Ok(out) => out,
             Err(e) => {
-                self.log_error(&format!("Failed to spawn claude: {}", e));
+                self.log_error(&format!("Failed to spawn '{}': {}", parts[0], e));
                 return Err(e.into());
             }
         };
@@ -445,8 +471,8 @@ Do NOT run any collab CLI commands. The harness handles all messaging and task d
             } else {
                 stderr.to_string()
             };
-            self.log_error(&format!("Claude exited with status {}: {}", output.status, detail));
-            return Err(anyhow::anyhow!("Claude failed: {}", detail));
+            self.log_error(&format!("CLI exited with status {}: {}", output.status, detail));
+            return Err(anyhow::anyhow!("CLI failed: {}", detail));
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);

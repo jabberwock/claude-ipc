@@ -295,6 +295,11 @@ enum Commands {
         #[arg(long, value_name = "MODEL")]
         model: Option<String>,
 
+        /// CLI command template with {prompt}, {model}, {workdir} placeholders
+        /// (default: "claude -p {prompt} --model {model} --allowedTools Bash,Read,Write,Edit")
+        #[arg(long, value_name = "TEMPLATE")]
+        cli_template: Option<String>,
+
         /// Enable trivial message auto-reply (default: true)
         #[arg(long)]
         auto_reply: Option<bool>,
@@ -374,7 +379,7 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    if let Commands::Worker { workdir, model, auto_reply, batch_wait } = cli.command {
+    if let Commands::Worker { workdir, model, cli_template, auto_reply, batch_wait } = cli.command {
         let workdir = workdir.unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
         let model = model.unwrap_or_else(|| "haiku".to_string());
         let auto_reply = auto_reply.unwrap_or(true);
@@ -386,31 +391,37 @@ async fn main() -> Result<()> {
             )
         })?;
 
-        // Load manifest for pipeline config and teammate info
-        let (hands_off_to, teammates) = match find_manifest() {
+        // Load manifest for pipeline config, teammate info, and cli_template fallback
+        let (hands_off_to, teammates, manifest_cli_template) = match find_manifest() {
             Ok(manifest_path) => {
                 match lifecycle::read_manifest(&manifest_path) {
                     Ok(manifest) => {
-                        let hands_off = manifest.iter()
-                            .find(|w| w.name == instance_id)
+                        let entry = manifest.iter().find(|w| w.name == instance_id);
+                        let hands_off = entry
                             .map(|w| w.hands_off_to.clone())
                             .unwrap_or_default();
+                        let tmpl = entry
+                            .and_then(|w| w.cli_template.clone());
                         let team: Vec<(String, String)> = manifest.iter()
                             .map(|w| (w.name.clone(), w.role.clone()))
                             .collect();
-                        (hands_off, team)
+                        (hands_off, team, tmpl)
                     }
-                    Err(_) => (vec![], vec![]),
+                    Err(_) => (vec![], vec![], None),
                 }
             }
-            Err(_) => (vec![], vec![]),
+            Err(_) => (vec![], vec![], None),
         };
+
+        // Priority: CLI flag > manifest > default
+        let resolved_cli_template = cli_template.or(manifest_cli_template);
 
         let harness = worker::WorkerHarness::new(
             CollabClient::new(&server, &instance_id, token.as_deref()),
             instance_id,
             workdir,
             model,
+            resolved_cli_template,
             auto_reply,
             batch_wait,
             hands_off_to,
@@ -662,10 +673,14 @@ async fn lifecycle_start(target: &str, server: &str, token: Option<&str>) -> Res
             &worker.name,
             server,
             token,
+            worker.cli_template.as_deref(),
         )?;
 
         let pid = child.id();
-        let cmd = format!("collab worker --workdir {} --model {}", worker.output_dir, worker.model);
+        let mut cmd = format!("collab worker --workdir {} --model {}", worker.output_dir, worker.model);
+        if let Some(tmpl) = &worker.cli_template {
+            cmd.push_str(&format!(" --cli-template {:?}", tmpl));
+        }
         lifecycle::save_worker_pid(&pids_file, &worker.name, pid, &cmd)?;
 
         // Detach the child process

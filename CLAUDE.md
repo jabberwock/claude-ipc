@@ -49,12 +49,15 @@ Create a `workers.yaml` file in your project:
 
 ```yaml
 server: http://localhost:8000
+cli_template: "claude -p {prompt} --model {model} --allowedTools Bash,Read,Write,Edit"
 workers:
   - name: frontend
     role: "Frontend development"
   - name: backend
     role: "Backend API development"
 ```
+
+The `cli_template` field specifies which AI CLI tool to use. Replace `claude` with your tool of choice (e.g., `cursor`, `ollama run {model} {prompt}`). Available placeholders: `{prompt}`, `{model}`, `{workdir}`. If omitted, `collab init` writes `{agent} -p {prompt} --model {model}` which must be edited before workers can start.
 
 Run initialization:
 
@@ -138,12 +141,16 @@ collab init
 ```yaml
 server: http://localhost:8000
 output_dir: ./workers     # optional — where to create worker directories
+cli_template: "claude -p {prompt} --model {model} --allowedTools Bash,Read,Write,Edit"  # optional — project default
 workers:
   - name: frontend
     role: "Build the React UI and manage component state"
   - name: backend
     role: "Implement REST API endpoints and database queries"
+    cli_template: "cursor -p {prompt} --model {model}"  # optional — per-worker override
 ```
+
+The `cli_template` field controls which CLI tool workers use to process messages. Placeholders: `{prompt}`, `{model}`, `{workdir}`. Per-worker templates override the project default.
 
 Creates a `.collab/workers.json` manifest and CLAUDE.md files in each worker directory.
 
@@ -331,6 +338,7 @@ Initialize workers and start them all:
 # 1. Create workers.yaml
 cat > workers.yaml <<EOF
 server: http://localhost:8000
+cli_template: "claude -p {prompt} --model {model} --allowedTools Bash,Read,Write,Edit"
 workers:
   - name: frontend
     role: "React UI and component state"

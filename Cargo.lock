@@ -421,6 +421,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sha1",
+ "shlex",
  "tempfile",
  "textual-rs",
  "tokio",

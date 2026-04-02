@@ -23,6 +23,9 @@ pub struct WorkerManifestEntry {
     pub codebase_path: String,
     pub model: String,
     pub output_dir: String,
+    /// CLI command template with {prompt}, {model}, {workdir} placeholders
+    #[serde(default)]
+    pub cli_template: Option<String>,
     /// Pipeline: workers to auto-dispatch to when this worker completes a task
     #[serde(default)]
     pub hands_off_to: Vec<String>,
@@ -64,6 +67,7 @@ pub fn spawn_worker(
     instance_name: &str,
     server: &str,
     token: Option<&str>,
+    cli_template: Option<&str>,
 ) -> Result<Child> {
     // Validate workdir
     let validated_workdir = validate_workdir(workdir)?;
@@ -83,6 +87,10 @@ pub fn spawn_worker(
     cmd.arg("worker")
         .arg("--workdir").arg(&validated_workdir)
         .arg("--model").arg(model);
+
+    if let Some(tmpl) = cli_template {
+        cmd.arg("--cli-template").arg(tmpl);
+    }
 
     // Inherit parent env, override COLLAB_* for this worker's identity
     cmd.env("COLLAB_INSTANCE", instance_name);

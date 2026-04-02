@@ -16,6 +16,8 @@ pub struct ProjectConfig {
     /// Default Claude model for all workers (e.g., haiku, sonnet) — can be overridden per-worker
     #[serde(default = "default_model")]
     pub model: String,
+    /// CLI command template with {prompt}, {model}, {workdir} placeholders
+    pub cli_template: Option<String>,
     pub workers: Vec<WorkerConfig>,
 }
 
@@ -38,6 +40,8 @@ pub struct WorkerConfig {
     pub color: Option<u8>,
     /// Claude model for this worker (e.g., haiku, sonnet) — overrides project default if set
     pub model: Option<String>,
+    /// CLI command template — overrides project default if set
+    pub cli_template: Option<String>,
     /// Pipeline: workers to auto-dispatch to when this worker completes a task
     #[serde(default)]
     pub hands_off_to: Vec<String>,
@@ -45,7 +49,7 @@ pub struct WorkerConfig {
 
 impl ProjectConfig {
     pub fn new(server: String, output_dir: Option<String>, codebase_path: Option<String>, model: String, workers: Vec<WorkerConfig>) -> Self {
-        Self { server, output_dir, codebase_path, model, workers }
+        Self { server, output_dir, codebase_path, model, cli_template: None, workers }
     }
 }
 
@@ -330,11 +334,15 @@ fn write_worker_manifest(project_root: &Path, output_dir: &Path, config: &Projec
                     .unwrap_or_else(|_| ".".to_string())
             });
 
+        let cli_tmpl = Some(worker.cli_template.clone()
+            .or_else(|| config.cli_template.clone())
+            .unwrap_or_else(|| "{agent} -p {prompt} --model {model}".to_string()));
         manifest_entries.push(WorkerManifestEntry {
             name: worker.name.clone(),
             role: worker.role.clone(),
             codebase_path,
             model: worker_model,
+            cli_template: cli_tmpl,
             output_dir: {
                 let base_str = output_dir.to_string_lossy();
                 let clean = base_str.strip_prefix("./").unwrap_or(&base_str);
