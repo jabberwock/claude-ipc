@@ -471,9 +471,14 @@ async fn main() -> Result<()> {
         let mut total_calls: u32 = 0;
 
         for line in content.lines() {
+            if line.len() > 1024 || line.is_empty() { continue; }
             let cols: Vec<&str> = line.split('\t').collect();
             if cols.len() >= 5 {
-                let worker = cols[1].to_string();
+                let worker = cols[1];
+                if worker.len() > 64 || !worker.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+                    continue;
+                }
+                let worker = worker.to_string();
                 let dur: u64 = cols[2].parse().unwrap_or(0);
                 let inp: u64 = cols[3].parse().unwrap_or(0);
                 let out: u64 = cols[4].parse().unwrap_or(0);
