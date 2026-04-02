@@ -163,6 +163,42 @@ The old way to wire agents together was polling — `/loop 1m collab list` insid
 
 ---
 
+### What does it cost?
+
+Real numbers from a live 8-worker team building a Diablo 4 app:
+
+```
+$ collab usage
+
+Worker                  Input   Output  Calls   Time
+────────────────────────────────────────────────────
+project-manager          102K      41K    113  1874s
+validator                 98K      26K     93  1785s
+researcher                62K      19K     58  1710s
+database                  51K      17K     49  1906s
+builder                    2K       1K      3   391s
+────────────────────────────────────────────────────
+TOTAL                    360K     125K    380 11459s
+
+Estimated cost (haiku): $0.2468
+```
+
+**8 workers, 380 invocations, 30 minutes of active work — $0.25 on Haiku.**
+
+Each `claude -p` invocation gets a fresh ~2K token prompt (identity, teammates, todos, message). No conversation history dragging along. State persists externally via `.worker-state.json` and the todo queue — not in the context window.
+
+| Model | Est. cost/hour (8 workers active) | Idle cost |
+|-------|-----------------------------------|-----------|
+| Haiku | ~$0.50 | $0 |
+| Sonnet | ~$6 | $0 |
+| Opus | ~$30 | $0 |
+
+The architecture saves equally across all model tiers — you're always sending ~2K prompts instead of 100K+ context windows. The savings compound with more workers and longer sessions.
+
+Run `collab usage` in any project directory to see your own numbers.
+
+---
+
 ### Any agent that speaks HTTP
 
 `collab` doesn't know or care what's on the other end. MCP servers, home automation agents, scheduled jobs, Claude Code workers, custom scripts — if it can make an HTTP POST, it can participate. The server is a small Rust binary with a SQLite database.
