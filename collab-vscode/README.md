@@ -17,14 +17,14 @@ You need Node.js and this repo (or a copy of the `collab-vscode` folder).
    npx --yes @vscode/vsce package
    ```
 
-   This creates a file named like **`collab-vscode-0.1.0.vsix`** in `collab-vscode/`.
+   This creates a file named like **`collab-vscode-0.2.0.vsix`** in `collab-vscode/`.
 
 2. **Install it in Cursor or VS Code**
 
    - Open the **Extensions** view (square icon in the sidebar, or `Cmd+Shift+X` / `Ctrl+Shift+X`).
    - Click the **`⋯`** menu at the top of the Extensions panel.
    - Choose **Install from VSIX…**
-   - Pick the **`collab-vscode-0.1.0.vsix`** file.
+   - Pick the **`collab-vscode-0.2.0.vsix`** file.
    - When prompted, **Reload** the window.
 
 3. **Configure** (Settings → search **AI IPC** or **collab**):
