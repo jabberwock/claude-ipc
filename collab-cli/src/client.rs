@@ -778,6 +778,11 @@ impl CollabClient {
         let todo: Todo = resp.json().await?;
         println!("→ @{}  {}", todo.instance, &todo.hash[..7]);
         println!("  {}", todo.description);
+
+        // Wake the worker — send a ping so it picks up the new task immediately
+        let ping = format!("📋 New task assigned: {}", todo.description);
+        let _ = self.add_message(&todo.instance, &ping, None).await;
+
         Ok(())
     }
 
