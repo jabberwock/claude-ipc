@@ -1087,7 +1087,7 @@ function renderFeed() {
     try { S._seenMentions = new Set(JSON.parse(localStorage.getItem(seenKey) || '[]')); }
     catch { S._seenMentions = new Set(); }
   }
-  const myMentions = me ? all.filter(m => m.recipient === me || m.recipient === 'all') : [];
+  const myMentions = me ? all.filter(m => m.sender !== me && (m.recipient === me || m.recipient === 'all')) : [];
   // If we're viewing mentions tab, mark all as seen
   if (S.inboxMode) {
     myMentions.forEach(m => S._seenMentions.add(m.id));
@@ -1097,7 +1097,7 @@ function renderFeed() {
   const badge = document.getElementById('inbox-badge');
   badge.textContent = unseenMentions.length || '';
 
-  let msgs = S.inboxMode ? all.filter(m => m.recipient === me || m.recipient === 'all') : all;
+  let msgs = S.inboxMode ? all.filter(m => m.sender !== me && (m.recipient === me || m.recipient === 'all')) : all;
 
   document.getElementById('feed-title').innerHTML =
     S.inboxMode ? `<span aria-hidden="true">@</span>mentions` : `<span aria-hidden="true">#</span>general`;
