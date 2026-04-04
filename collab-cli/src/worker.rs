@@ -263,14 +263,15 @@ impl WorkerHarness {
                 };
 
                 if should_process {
-                    let messages = {
+                    let mut messages = {
                         let mut q = queue.lock().await;
                         std::mem::take(&mut *q)
                     };
                     *first_time.lock().await = None;
 
                     // Check if this is a self-kick (message from self)
-                    let is_self_kick = messages.iter().all(|m| m.sender == instance_id);
+                    let has_external = messages.iter().any(|m| m.sender != instance_id);
+                    let is_self_kick = !has_external;
                     if is_self_kick {
                         consecutive_kicks += 1;
                         if consecutive_kicks > max_self_kicks {
@@ -281,6 +282,8 @@ impl WorkerHarness {
                         }
                     } else {
                         consecutive_kicks = 0;
+                        // Strip self-kicks from mixed batches — only process external messages
+                        messages.retain(|m| m.sender != instance_id);
                     }
 
                     // Process messages
